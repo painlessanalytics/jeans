@@ -106,10 +106,101 @@ var tmplLayout = template.Must(template.New("layout").Parse(`<!DOCTYPE html>
   <header>
     <h1>Denims</h1>
     <span class="badge">Account Manager</span>
+    <nav style="margin-left:auto">
+      <a href="/logout" style="color:#94a3b8;font-size:0.85rem;text-decoration:none;" title="Sign out">Sign out</a>
+    </nav>
   </header>
   <main>
     {{template "content" .}}
   </main>
+</body>
+</html>
+`))
+
+// tmplLogin is a standalone page (no layout wrapper) shown before authentication.
+var tmplLogin = template.Must(template.New("login").Parse(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Denims — Sign In</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-box {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 0.75rem;
+      padding: 2rem 2.5rem;
+      width: 100%;
+      max-width: 380px;
+    }
+    h1 { font-size: 1.3rem; font-weight: 700; color: #f1f5f9; margin-bottom: 0.25rem; }
+    .subtitle { font-size: 0.85rem; color: #64748b; margin-bottom: 1.5rem; }
+    .field { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 1rem; }
+    .field label { font-size: 0.8rem; color: #94a3b8; font-weight: 500; }
+    .field input {
+      background: #0f172a;
+      border: 1px solid #475569;
+      border-radius: 0.4rem;
+      color: #f1f5f9;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.15s;
+      width: 100%;
+    }
+    .field input:focus { border-color: #3b82f6; }
+    .btn {
+      width: 100%;
+      padding: 0.55rem;
+      border-radius: 0.4rem;
+      border: none;
+      cursor: pointer;
+      font-size: 0.95rem;
+      font-weight: 600;
+      background: #3b82f6;
+      color: #fff;
+      margin-top: 0.5rem;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .alert-error {
+      background: #450a0a;
+      border: 1px solid #7f1d1d;
+      color: #fca5a5;
+      border-radius: 0.4rem;
+      padding: 0.6rem 0.75rem;
+      font-size: 0.875rem;
+      margin-bottom: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-box">
+    <h1>Denims</h1>
+    <p class="subtitle">Account Manager — sign in to continue</p>
+    {{if .Error}}<div class="alert-error">{{.Error}}</div>{{end}}
+    <form method="POST" action="/login" autocomplete="on">
+      <div class="field">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" required autofocus autocomplete="username">
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" required autocomplete="current-password">
+      </div>
+      <button class="btn" type="submit">Sign in</button>
+    </form>
+  </div>
 </body>
 </html>
 `))

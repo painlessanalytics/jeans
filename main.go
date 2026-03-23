@@ -17,6 +17,7 @@ import (
 	"time"
 )
 
+
 func main() {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -33,6 +34,12 @@ func main() {
 		log.Fatalf("denims: htaccess setup: %v", err)
 	}
 
+	// Load (or generate) the JWT signing secret
+	secret, err := cfg.jwtSecretBytes()
+	if err != nil {
+		log.Fatalf("denims: JWT secret: %v", err)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -41,10 +48,12 @@ func main() {
 		}
 		http.Redirect(w, r, "/users", http.StatusFound)
 	})
+	mux.HandleFunc("/login", loginHandler(cfg, secret))
+	mux.HandleFunc("/logout", logoutHandler())
 	mux.HandleFunc("/users", usersHandler(cfg))
 	mux.HandleFunc("/users/delete", deleteUserHandler(cfg))
 
-	handler := basicAuthMiddleware(cfg.HTAccessPath, mux)
+	handler := jwtMiddleware(secret, mux)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{
