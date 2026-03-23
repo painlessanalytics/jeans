@@ -1,0 +1,24 @@
+[Unit]
+Description=Denims Account Manager
+Documentation=https://github.com/painlessanalytics/denims
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/bin/denims
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=denims
+
+# Security hardening
+NoNewPrivileges=false
+ProtectSystem=false
+ReadWritePaths=/var/denims /home
+
+[Install]
+WantedBy=multi-user.target
