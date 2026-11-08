@@ -5,6 +5,7 @@
 set -euo pipefail
 
 BINARY_DEST="/usr/local/bin/denims"
+PASSWD_DEST="/usr/local/bin/denims-passwd"
 SERVICE_SRC="denims.service"
 SERVICE_DEST="/etc/systemd/system/denims.service"
 CONFIG_DIR="/var/denims/config"
@@ -23,11 +24,13 @@ command -v go >/dev/null 2>&1 || {
 # ── Build ────────────────────────────────────────────────────────────────────
 echo "==> Building denims..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-(cd "$SCRIPT_DIR" && go build -o denims .)
+(cd "$SCRIPT_DIR" && go build -o denims . && go build -o denims-passwd ./cmd/denims-passwd)
 
 # ── Install binary ────────────────────────────────────────────────────────────
 echo "==> Installing binary to $BINARY_DEST"
 install -m 0755 "$SCRIPT_DIR/denims" "$BINARY_DEST"
+echo "==> Installing denims-passwd to $PASSWD_DEST"
+install -m 0755 "$SCRIPT_DIR/denims-passwd" "$PASSWD_DEST"
 
 # ── Create config directory ───────────────────────────────────────────────────
 echo "==> Creating config directory $CONFIG_DIR"
@@ -42,7 +45,8 @@ systemctl enable denims.service
 
 # ── Start the service ─────────────────────────────────────────────────────────
 echo "==> Starting denims service"
-systemctl start denims.service
+# restart (not start) so that re-running the installer picks up the new binary
+systemctl restart denims.service
 
 echo ""
 echo "========================================================"
