@@ -3,9 +3,14 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"log"
+	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -15,6 +20,15 @@ import (
 const (
 	sessionCookieName = "denims_session"
 	sessionDuration   = 8 * time.Hour
+
+	// Login throttling: after this many failures within loginWindow, further
+	// attempts are rejected (HTTP 429) until the window ends. The per-username
+	// limit is looser so that an attacker can't trivially lock the real admin
+	// out, but still caps distributed guessing against one account.
+	loginWindow          = 15 * time.Minute
+	maxFailuresPerIP     = 5
+	maxFailuresPerUser   = 20
+	maxLoginUsernameKeyN = 64
 )
 
 // ── htpasswd helpers ─────────────────────────────────────────────────────────
@@ -47,21 +61,35 @@ func parseHTAccess(path string) (map[string]string, error) {
 	return users, nil
 }
 
+var (
+	dummyHashOnce sync.Once
+	dummyHash     []byte
+)
+
+// burnPasswordHash spends roughly one bcrypt comparison so that logins for
+// unknown users take about as long as logins for known ones, which stops
+// response timing from revealing which usernames exist.
+func burnPasswordHash(password string) {
+	dummyHashOnce.Do(func() {
+		dummyHash, _ = bcrypt.GenerateFromPassword([]byte("denims-timing-dummy"), bcrypt.DefaultCost)
+	})
+	_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
+}
+
 // validateCredentials checks username/password against the .htaccess file.
 func validateCredentials(htaccessPath, username, password string) bool {
 	users, err := parseHTAccess(htaccessPath)
 	if err != nil {
+		burnPasswordHash(password)
 		return false
 	}
 	hash, ok := users[username]
-	if !ok {
+	// $2y$, $2a$, $2b$ are all handled by Go's bcrypt package
+	if !ok || !strings.HasPrefix(hash, "$2") {
+		burnPasswordHash(password)
 		return false
 	}
-	// $2y$, $2a$, $2b$ are all handled by Go's bcrypt package
-	if strings.HasPrefix(hash, "$2") {
-		return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
-	}
-	return false
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 
 // AddHTAccessUser adds or updates a user entry in the .htaccess file.
@@ -79,7 +107,7 @@ func AddHTAccessUser(htaccessPath, username, password string) error {
 }
 
 func writeHTAccess(path string, users map[string]string) error {
-	if err := os.MkdirAll(ConfigDir, 0750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return err
 	}
 	var sb strings.Builder
@@ -155,6 +183,8 @@ func jwtMiddleware(secret []byte, next http.Handler) http.Handler {
 
 // loginHandler handles GET (show form) and POST (validate + issue token).
 func loginHandler(cfg *Config, secret []byte) http.HandlerFunc {
+	ipLimiter := newFailureLimiter(maxFailuresPerIP, loginWindow)
+	userLimiter := newFailureLimiter(maxFailuresPerUser, loginWindow)
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -171,7 +201,32 @@ func loginHandler(cfg *Config, secret []byte) http.HandlerFunc {
 			username := r.FormValue("username")
 			password := r.FormValue("password")
 
+			// Only the TCP peer address is used; X-Forwarded-For is client
+			// controlled and would let an attacker dodge the limit.
+			ipKey := clientIP(r)
+			userKey := username
+			if len(userKey) > maxLoginUsernameKeyN {
+				userKey = userKey[:maxLoginUsernameKeyN]
+			}
+			for _, l := range []struct {
+				lim *failureLimiter
+				key string
+			}{{ipLimiter, ipKey}, {userLimiter, userKey}} {
+				if blocked, wait := l.lim.blocked(l.key); blocked {
+					w.Header().Set("Content-Type", "text/html; charset=utf-8")
+					w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+					w.WriteHeader(http.StatusTooManyRequests)
+					_ = tmplLogin.ExecuteTemplate(w, "login", map[string]string{
+						"Error": fmt.Sprintf("Too many failed sign-in attempts. Try again in %d minute(s).", int(wait.Minutes())+1),
+					})
+					return
+				}
+			}
+
 			if !validateCredentials(cfg.HTAccessPath, username, password) {
+				ipLimiter.fail(ipKey)
+				userLimiter.fail(userKey)
+				log.Printf("denims: failed login for %q from %s", username, ipKey)
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				w.WriteHeader(http.StatusUnauthorized)
 				_ = tmplLogin.ExecuteTemplate(w, "login", map[string]string{
@@ -179,6 +234,8 @@ func loginHandler(cfg *Config, secret []byte) http.HandlerFunc {
 				})
 				return
 			}
+
+			ipLimiter.reset(ipKey)
 
 			tokenStr, err := issueSessionToken(username, secret)
 			if err != nil {
@@ -209,6 +266,15 @@ func logoutHandler() http.HandlerFunc {
 		http.SetCookie(w, expiredCookie())
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 	}
+}
+
+// clientIP returns the host part of the connection's remote address.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 func expiredCookie() *http.Cookie {
