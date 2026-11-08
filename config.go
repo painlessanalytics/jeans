@@ -16,6 +16,9 @@ const (
 	TLSCertFile   = "/var/denims/config/server.crt"
 	TLSKeyFile    = "/var/denims/config/server.key"
 	HomeDir       = "/home"
+
+	// InitialPasswordFile holds the generated first-run admin password (root-only).
+	InitialPasswordFile = "/var/denims/config/initial-admin-password"
 )
 
 // Config holds application configuration loaded from config.json.

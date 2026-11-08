@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"html/template"
@@ -15,6 +16,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 
@@ -229,19 +232,60 @@ func ensureTLSCert(certPath, keyPath string) error {
 	return pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: privDER})
 }
 
-// ensureHTAccess creates the .htaccess file with a default admin user if it
-// does not already exist.
+// ensureHTAccess makes sure the .htaccess file exists. On first run it creates
+// an "admin" user with a randomly generated password, written to a root-only
+// file (never to the logs). On later runs it warns if the legacy hard-coded
+// default password is still in use.
 func ensureHTAccess(htaccessPath string) error {
 	if _, err := os.Stat(htaccessPath); err == nil {
+		warnIfLegacyDefaultPassword(htaccessPath)
 		return nil // already exists
 	}
-
-	log.Printf("denims: creating default .htaccess at %s", htaccessPath)
-	log.Printf("denims: default credentials — username: admin  password: changeme")
-	log.Printf("denims: IMPORTANT: change the default password immediately!")
 
 	if err := os.MkdirAll(ConfigDir, 0750); err != nil {
 		return err
 	}
-	return AddHTAccessUser(htaccessPath, "admin", "changeme")
+
+	password, err := randomPassword()
+	if err != nil {
+		return fmt.Errorf("generating admin password: %w", err)
+	}
+
+	// Write the plaintext password where only root can read it, before creating
+	// .htaccess, so a crash in between can't leave an account nobody knows the
+	// password to.
+	if err := os.WriteFile(InitialPasswordFile, []byte("admin:"+password+"\n"), 0600); err != nil {
+		return fmt.Errorf("writing initial password file: %w", err)
+	}
+	if err := AddHTAccessUser(htaccessPath, "admin", password); err != nil {
+		return err
+	}
+
+	log.Printf("denims: created %s with user %q", htaccessPath, "admin")
+	log.Printf("denims: generated initial password saved to %s (readable by root only)", InitialPasswordFile)
+	log.Printf("denims: sign in, then run `denims-passwd admin <new-password>` and delete that file")
+	return nil
+}
+
+// randomPassword returns a 128-bit random password, URL-safe base64 encoded.
+func randomPassword() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// warnIfLegacyDefaultPassword logs a warning when an admin account still uses
+// the old hard-coded "changeme" password from earlier versions.
+func warnIfLegacyDefaultPassword(htaccessPath string) {
+	users, err := parseHTAccess(htaccessPath)
+	if err != nil {
+		return
+	}
+	for name, hash := range users {
+		if bcrypt.CompareHashAndPassword([]byte(hash), []byte("changeme")) == nil {
+			log.Printf("denims: WARNING: user %q still has the default password %q — change it now with `denims-passwd %s <new-password>`", name, "changeme", name)
+		}
+	}
 }
