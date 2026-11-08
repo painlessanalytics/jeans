@@ -78,14 +78,31 @@ func main() {
 	}
 }
 
+// usersPage is the view model for the users template.
+type usersPage struct {
+	Users   []SystemUser
+	Error   string
+	Success string
+}
+
+// renderUsers fills in the user list and renders the users page.
+func renderUsers(w http.ResponseWriter, cfg *Config, data usersPage) {
+	users, err := ListUsers(cfg.HomeDir)
+	if err != nil {
+		data.Error = fmt.Sprintf("Failed to list users: %v", err)
+	}
+	data.Users = users
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := executeTemplate(w, tmplUsers, data); err != nil {
+		log.Printf("denims: template error: %v", err)
+	}
+}
+
 // usersHandler renders the user list and handles new-user form submissions.
 func usersHandler(cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		data := struct {
-			Users   []SystemUser
-			Error   string
-			Success string
-		}{}
+		var data usersPage
 
 		switch r.Method {
 		case http.MethodGet:
@@ -110,20 +127,14 @@ func usersHandler(cfg *Config) http.HandlerFunc {
 			return
 		}
 
-		users, err := ListUsers(cfg.HomeDir)
-		if err != nil {
-			data.Error = fmt.Sprintf("Failed to list users: %v", err)
-		}
-		data.Users = users
-
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := executeTemplate(w, tmplUsers, data); err != nil {
-			log.Printf("denims: template error: %v", err)
-		}
+		renderUsers(w, cfg, data)
 	}
 }
 
-// deleteUserHandler handles user deletion form submissions.
+// deleteUserHandler handles user deletion form submissions. The result is
+// rendered directly (rather than via a redirect with message query params) so
+// that the outcome is always shown and arbitrary text can't be injected into
+// the page through a crafted URL.
 func deleteUserHandler(cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -135,12 +146,14 @@ func deleteUserHandler(cfg *Config) http.HandlerFunc {
 			return
 		}
 		username := r.FormValue("username")
-		if err := DeleteUser(username); err != nil {
-			// Redirect back with an error query param
-			http.Redirect(w, r, fmt.Sprintf("/users?error=%s", template.URLQueryEscaper(err.Error())), http.StatusSeeOther)
-			return
+
+		var data usersPage
+		if err := DeleteUser(cfg.HomeDir, username); err != nil {
+			data.Error = fmt.Sprintf("Failed to delete user: %v", err)
+		} else {
+			data.Success = fmt.Sprintf("User %q deleted successfully.", username)
 		}
-		http.Redirect(w, r, "/users?success=User+deleted+successfully", http.StatusSeeOther)
+		renderUsers(w, cfg, data)
 	}
 }
 
